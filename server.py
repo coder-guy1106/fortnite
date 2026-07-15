@@ -7,7 +7,7 @@ import json
 # SERVER VERSION AUTHORITY
 # Increment this when making major updates!
 # ==========================================
-SERVER_VERSION = "1.1.0"
+SERVER_VERSION = "1.1.1"
 
 connected_clients = set()
 build_history = {} 
