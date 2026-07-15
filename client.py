@@ -29,6 +29,10 @@ connecting = False
 connected_successfully = False
 connection_error = ""
 
+# --- NEW: State Machine Variables ---
+current_mode = 'combat' # Can be 'combat' or 'build'
+is_aiming = False       # Tracks if the player is holding Right-Click
+
 my_health = 100
 current_weapon = 1 
 build_mode = 'wall'
@@ -41,7 +45,6 @@ ground = None
 preview_block = None
 ui_elements = {}
 
-# We will store the actual 3D gun entities here
 gun_entities = {}
 active_gun = None
 
@@ -87,42 +90,40 @@ ui_elements['status'] = Text(text="", parent=menu_parent, y=-0.25, origin=(0,0),
 Button(text='X', parent=menu_parent, position=(0.85, 0.45), scale=(0.05, 0.05), color=color.red).on_click = application.quit
 
 # ==========================================
-# 4. WEAPON & VISUAL EFFECTS SETUP
+# 4. WEAPON SETUP
 # ==========================================
 def build_weapons():
-    """Constructs detailed gun models using parent/child entities."""
-    # 1. Assault Rifle
     ar = Entity(parent=camera, position=(0.3, -0.3, 0.5), visible=False)
-    Entity(parent=ar, model='cube', color=color.dark_gray, scale=(0.08, 0.1, 0.5)) # Body
-    Entity(parent=ar, model='cube', color=color.black, scale=(0.03, 0.03, 0.4), position=(0, 0, 0.35)) # Barrel
-    Entity(parent=ar, model='cube', color=color.black, scale=(0.04, 0.2, 0.1), position=(0, -0.1, 0.05)) # Mag
+    Entity(parent=ar, model='cube', color=color.dark_gray, scale=(0.08, 0.1, 0.5)) 
+    Entity(parent=ar, model='cube', color=color.black, scale=(0.03, 0.03, 0.4), position=(0, 0, 0.35)) 
+    Entity(parent=ar, model='cube', color=color.black, scale=(0.04, 0.2, 0.1), position=(0, -0.1, 0.05)) 
     gun_entities[1] = {'entity': ar, 'name': 'Assault Rifle', 'dmg': 15}
 
-    # 2. Shotgun
     shotgun = Entity(parent=camera, position=(0.3, -0.3, 0.5), visible=False)
-    Entity(parent=shotgun, model='cube', color=color.orange, scale=(0.12, 0.12, 0.3)) # Body
-    Entity(parent=shotgun, model='cube', color=color.gray, scale=(0.1, 0.05, 0.3), position=(0, 0, 0.25)) # Double Barrel
+    Entity(parent=shotgun, model='cube', color=color.orange, scale=(0.12, 0.12, 0.3)) 
+    Entity(parent=shotgun, model='cube', color=color.gray, scale=(0.1, 0.05, 0.3), position=(0, 0, 0.25)) 
     gun_entities[2] = {'entity': shotgun, 'name': 'Tactical Shotgun', 'dmg': 40}
 
-    # 3. Sniper
     sniper = Entity(parent=camera, position=(0.3, -0.3, 0.5), visible=False)
-    Entity(parent=sniper, model='cube', color=color.olive, scale=(0.08, 0.12, 0.6)) # Body
-    Entity(parent=sniper, model='cube', color=color.black, scale=(0.03, 0.03, 0.7), position=(0, 0, 0.5)) # Long Barrel
-    Entity(parent=sniper, model='cube', color=color.black, scale=(0.05, 0.05, 0.2), position=(0, 0.08, 0.1)) # Scope
+    Entity(parent=sniper, model='cube', color=color.olive, scale=(0.08, 0.12, 0.6)) 
+    Entity(parent=sniper, model='cube', color=color.black, scale=(0.03, 0.03, 0.7), position=(0, 0, 0.5)) 
+    Entity(parent=sniper, model='cube', color=color.black, scale=(0.05, 0.05, 0.2), position=(0, 0.08, 0.1)) 
     gun_entities[3] = {'entity': sniper, 'name': 'Heavy Sniper', 'dmg': 90}
 
 def equip_weapon(w_id):
-    """Switches the active weapon visually and updates UI."""
-    global active_gun, current_weapon
+    global active_gun, current_weapon, current_mode
     if active_gun:
         active_gun.visible = False
+    
+    current_mode = 'combat' # Force combat mode
     current_weapon = w_id
     active_gun = gun_entities[w_id]['entity']
     active_gun.visible = True
-    ui_elements['wep'].text = f"[{w_id}] {gun_entities[w_id]['name']} | Build: Z, X, C"
+    
+    if preview_block: preview_block.visible = False
+    ui_elements['wep'].text = f"COMBAT: [{w_id}] {gun_entities[w_id]['name']} | Build: Z,X,C"
 
 def spawn_hit_particle(pos):
-    """Creates a temporary spark effect where the bullet lands."""
     spark = Entity(model='sphere', color=color.yellow, position=pos, scale=0.1, unlit=True)
     spark.animate_scale(0.5, duration=0.1)
     spark.animate_color(color.clear, duration=0.1)
@@ -200,42 +201,40 @@ def update():
         ui_elements['health'] = Text(text=f"HP: {my_health}", position=(-0.85, -0.4), scale=2, color=color.green)
         ui_elements['wep'] = Text(text="", position=(0.3, -0.4), scale=1.5, color=color.white)
         
+        preview_block = Entity(model='cube', color=color.rgba(0, 0, 255, 100), unlit=True, collider=None, visible=False)
+        
         build_weapons()
         equip_weapon(1)
-        
-        preview_block = Entity(model='cube', color=color.rgba(0, 0, 255, 100), unlit=True, collider=None)
         
         game_started = True
         connected_successfully = False 
         
     if game_started and ws and player:
-        cx, cy, cz = get_target_cell()
-        
-        if is_supported(cx, cy, cz):
-            preview_block.color = color.rgba(0, 200, 255, 120)
-        else:
-            preview_block.color = color.rgba(255, 0, 0, 120)
-            
-        pos, rot, scale = get_world_pos_and_rot(cx, cy, cz, build_mode, player.rotation_y)
-        preview_block.position = pos
-        preview_block.rotation = (0 if build_mode!='ramp' else -45, rot, 0)
-        preview_block.scale = scale
+        # --- UPDATE HOLOGRAM ONLY IF IN BUILD MODE ---
+        if current_mode == 'build':
+            cx, cy, cz = get_target_cell()
+            if is_supported(cx, cy, cz):
+                preview_block.color = color.rgba(0, 200, 255, 120)
+            else:
+                preview_block.color = color.rgba(255, 0, 0, 120)
+                
+            pos, rot, scale = get_world_pos_and_rot(cx, cy, cz, build_mode, player.rotation_y)
+            preview_block.position = pos
+            preview_block.rotation = (0 if build_mode!='ramp' else -45, rot, 0)
+            preview_block.scale = scale
 
+        # Process Network Queue
         while len(network_queue) > 0:
             info = network_queue.pop(0)
-            
             if info['type'] == 'player':
                 pid = info['id']
                 if pid not in other_players:
                     other_players[pid] = Entity(model='cube', color=color.magenta, scale=(1.2, 2.5, 1.2), collider='box')
                     other_players[pid].pid = pid 
-                
                 other_players[pid].position = (info['x'], info['y'], info['z'])
                 other_players[pid].rotation_y = info['rot_y']
-            
             elif info['type'] == 'build':
                 place_structure_local(info['cx'], info['cy'], info['cz'], info['b_type'], info['rot_y'])
-            
             elif info['type'] == 'damage' and info['target_id'] == my_id:
                 my_health -= info['amount']
                 if my_health <= 0:
@@ -248,50 +247,78 @@ def update():
         except: pass
 
 def input(key):
-    global build_mode
+    global build_mode, current_mode, is_aiming
     if not game_started: return
 
-    # Weapon Swaps
+    # --- MODE SWAPPING ---
     if key in ['1', '2', '3']:
-        equip_weapon(int(key))
+        equip_weapon(int(key)) # This automatically forces combat mode
 
-    # UPDATED KEYBINDS
-    if key == 'z': build_mode = 'wall'
-    if key == 'x': build_mode = 'floor'
-    if key == 'c': build_mode = 'ramp'
-
-    if key == 'right mouse down':
-        cx, cy, cz = get_target_cell()
-        if is_supported(cx, cy, cz):
-            snap_rot = round(player.rotation_y / 90) * 90
-            place_structure_local(cx, cy, cz, build_mode, snap_rot)
-            try:
-                ws.send(json.dumps({'type': 'build', 'b_type': build_mode, 'cx': cx, 'cy': cy, 'cz': cz, 'rot_y': snap_rot}))
-            except: pass
-
-    if key == 'left mouse down':
-        # Recoil Animation
-        active_gun.position = (0.3, -0.25, 0.4)
-        invoke(setattr, active_gun, 'position', (0.3, -0.3, 0.5), delay=0.1)
-
-        hit_info = raycast(camera.world_position, camera.forward, distance=200, ignore=[player, preview_block, active_gun])
+    if key in ['z', 'x', 'c']:
+        current_mode = 'build'
+        active_gun.visible = False
+        preview_block.visible = True
         
-        # Enhanced Tracer Line
-        tracer_length = hit_info.distance if hit_info.hit else 200
-        tracer = Entity(model='cube', color=color.rgba(255, 255, 100, 200), unlit=True, scale=(0.04, 0.04, tracer_length))
-        tracer.position = active_gun.world_position
-        tracer.look_at(hit_info.world_point if hit_info.hit else camera.world_position + (camera.forward * 200))
-        tracer.position += tracer.forward * (tracer.scale_z / 2)
-        tracer.animate_color(color.clear, duration=0.1) # Fade out smoothly
-        destroy(tracer, delay=0.15) 
+        if key == 'z': build_mode = 'wall'
+        if key == 'x': build_mode = 'floor'
+        if key == 'c': build_mode = 'ramp'
+        
+        # Reset ADS if they swap to build mode while aiming
+        camera.fov = 90
+        is_aiming = False
+        
+        ui_elements['wep'].text = f"BUILD: {build_mode.upper()} | Combat: 1,2,3"
 
-        if hit_info.hit:
-            spawn_hit_particle(hit_info.world_point)
-            
-            if hasattr(hit_info.entity, 'pid'):
+    # --- MOUSE INPUTS ---
+    if key == 'left mouse down':
+        if current_mode == 'build':
+            # Place Structure
+            cx, cy, cz = get_target_cell()
+            if is_supported(cx, cy, cz):
+                snap_rot = round(player.rotation_y / 90) * 90
+                place_structure_local(cx, cy, cz, build_mode, snap_rot)
                 try:
-                    ws.send(json.dumps({'type': 'damage', 'target_id': hit_info.entity.pid, 'amount': gun_entities[current_weapon]['dmg']}))
+                    ws.send(json.dumps({'type': 'build', 'b_type': build_mode, 'cx': cx, 'cy': cy, 'cz': cz, 'rot_y': snap_rot}))
                 except: pass
+                
+        elif current_mode == 'combat':
+            # Shoot Weapon
+            base_pos = Vec3(0, -0.2, 0.4) if is_aiming else Vec3(0.3, -0.3, 0.5)
+            
+            # Recoil
+            active_gun.position = base_pos + Vec3(0, 0.05, -0.1)
+            invoke(setattr, active_gun, 'position', base_pos, delay=0.1)
+
+            hit_info = raycast(camera.world_position, camera.forward, distance=200, ignore=[player, preview_block, active_gun])
+            
+            # Tracer
+            tracer_length = hit_info.distance if hit_info.hit else 200
+            tracer = Entity(model='cube', color=color.rgba(255, 255, 100, 200), unlit=True, scale=(0.04, 0.04, tracer_length))
+            tracer.position = active_gun.world_position
+            tracer.look_at(hit_info.world_point if hit_info.hit else camera.world_position + (camera.forward * 200))
+            tracer.position += tracer.forward * (tracer.scale_z / 2)
+            tracer.animate_color(color.clear, duration=0.1) 
+            destroy(tracer, delay=0.15) 
+
+            if hit_info.hit:
+                spawn_hit_particle(hit_info.world_point)
+                if hasattr(hit_info.entity, 'pid'):
+                    try:
+                        ws.send(json.dumps({'type': 'damage', 'target_id': hit_info.entity.pid, 'amount': gun_entities[current_weapon]['dmg']}))
+                    except: pass
+
+    # --- ADS (Aim Down Sights) LOGIC ---
+    if key == 'right mouse down':
+        if current_mode == 'combat':
+            is_aiming = True
+            camera.fov = 70 # Zoom in
+            active_gun.position = (0, -0.2, 0.4) # Center the gun
+
+    if key == 'right mouse up':
+        if current_mode == 'combat':
+            is_aiming = False
+            camera.fov = 90 # Revert zoom
+            active_gun.position = (0.3, -0.3, 0.5) # Put gun back to hip
 
     if key == 'escape':
         application.quit()
