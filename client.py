@@ -257,4 +257,21 @@ def input(key):
         gun_model.position = (0.3, -0.25, 0.4)
         invoke(setattr, gun_model, 'position', (0.3, -0.3, 0.5), delay=0.1)
 
-        hit_info =
+        hit_info = raycast(camera.world_position, camera.forward, distance=150, ignore=[player, preview_block])
+        
+        tracer_length = hit_info.distance if hit_info.hit else 150
+        tracer = Entity(model='cube', color=color.yellow, unlit=True, scale=(0.05, 0.05, tracer_length))
+        tracer.position = gun_model.world_position
+        tracer.look_at(hit_info.world_point if hit_info.hit else camera.world_position + (camera.forward * 150))
+        tracer.position += tracer.forward * (tracer.scale_z / 2)
+        destroy(tracer, delay=0.05) 
+
+        if hit_info.hit and hasattr(hit_info.entity, 'pid'):
+            try:
+                ws.send(json.dumps({'type': 'damage', 'target_id': hit_info.entity.pid, 'amount': weapons[current_weapon]['dmg']}))
+            except: pass
+
+    if key == 'escape':
+        application.quit()
+
+app.run()
