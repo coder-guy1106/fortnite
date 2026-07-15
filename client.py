@@ -30,8 +30,6 @@ last_attacker_id = ""
 other_players = {}
 other_player_labels = {}
 network_queue = [] 
-
-# NEW: Leaderboard Data Tracker
 leaderboard_data = {}
 
 game_started = False
@@ -56,11 +54,15 @@ ground = None
 preview_block = None
 ui_elements = {}
 
+# UI Elements
 damage_borders = []
 hit_text_ui = None
 death_screen = None
 respawn_text = None
 scope_ui = None
+crosshair = None
+hitmarker = None
+damage_dealt_ui = None
 
 gun_entities = {}
 active_gun = None
@@ -73,9 +75,6 @@ weapons = {
 }
 last_fired = 0
 
-# ==========================================
-# UTILITY FUNCTIONS
-# ==========================================
 def rgb_to_hex(r, g, b):
     return f"#{int(r):02x}{int(g):02x}{int(b):02x}"
 
@@ -120,7 +119,7 @@ Button(text='PLAY ONLINE', parent=menu_parent, y=-0.05, scale=(0.4, 0.12), color
 ui_elements['status'] = Text(text="", parent=menu_parent, y=-0.25, origin=(0,0), color=color.white)
 
 # ==========================================
-# WEAPON BUILDERS
+# WEAPONS
 # ==========================================
 def build_weapons():
     pickaxe = Entity(parent=camera, position=(0.3, -0.3, 0.5), visible=False)
@@ -151,10 +150,10 @@ def equip_weapon(w_id):
     current_weapon = w_id
     active_gun = gun_entities[w_id]['entity']
     
-    # FIX: Forcibly reset sniper aim lock on weapon swap
     is_aiming = False
     camera.fov = 90
     if scope_ui: scope_ui.visible = False
+    if crosshair: crosshair.visible = True
     active_gun.visible = True
     
     if preview_block: preview_block.visible = False
@@ -192,7 +191,7 @@ def spawn_hit_particle(pos):
     destroy(spark, delay=0.15)
 
 # ==========================================
-# SMART BUILDING & STRUCTURAL INTEGRITY
+# SMART BUILDING 
 # ==========================================
 def get_target_cell():
     hit_info = raycast(camera.world_position, camera.forward, distance=BUILD_RANGE, ignore=[player, preview_block, active_gun])
@@ -303,6 +302,7 @@ def handle_death():
     if active_gun: active_gun.visible = False
     if preview_block: preview_block.visible = False
     if scope_ui: scope_ui.visible = False
+    if crosshair: crosshair.visible = False
     
     death_screen.visible = True
     camera.fov = 90
@@ -347,8 +347,8 @@ def respawn():
 # MAIN LOOP
 # ==========================================
 def update():
-    global game_started, connected_successfully, ground, player, preview_block, my_health, damage_borders, hit_text_ui
-    global death_screen, respawn_text, scope_ui, my_kills
+    global game_started, connected_successfully, ground, player, preview_block, my_health, damage_borders
+    global hit_text_ui, hitmarker, damage_dealt_ui, crosshair, death_screen, respawn_text, scope_ui, my_kills
     
     if connection_error != "":
         ui_elements['status'].text = connection_error
@@ -366,11 +366,11 @@ def update():
         player.step_height = 1.2 
         
         ui_elements['health'] = Text(text=f"HP: {my_health}", position=(-0.85, -0.4), scale=2, color=color.green)
+        ui_elements['kills'] = Text(text=f"KILLS: {my_kills}", position=(-0.85, 0.45), scale=2, color=color.yellow)
         ui_elements['wep'] = Text(text="", position=(0.3, -0.4), scale=1.5, color=color.white)
-        
-        # LEADERBOARD UI
         ui_elements['leaderboard'] = Text(text="LEADERBOARD", position=(0.6, 0.45), scale=1.5, color=color.white)
         
+        # Damage Taking Borders
         for _ in range(4):
             damage_borders.append(Entity(parent=camera.ui, model='quad', color=color.rgba(255, 0, 0, 0), z=-1))
         damage_borders[0].scale, damage_borders[0].y = (2, 0.05), 0.475  
@@ -378,19 +378,23 @@ def update():
         damage_borders[2].scale, damage_borders[2].x = (0.05, 1), -0.875 
         damage_borders[3].scale, damage_borders[3].x = (0.05, 1), 0.875  
         
+        # Hit Feedback UIs (Taking and Dealing)
         hit_text_ui = Text(parent=camera.ui, text="", color=color.red, scale=3, origin=(0,0), y=0.1)
+        hitmarker = Text(parent=camera.ui, text="X", color=color.red, scale=3, origin=(0,0), visible=False)
+        damage_dealt_ui = Text(parent=camera.ui, text="", color=color.yellow, scale=2, origin=(0,0), x=0.03, y=0.03)
         
         death_screen = Entity(parent=camera.ui, model='quad', color=color.rgba(0, 0, 0, 220), scale=(2, 1), z=-2, visible=False)
         Text(parent=death_screen, text="YOU WERE ELIMINATED", scale=3, origin=(0,0), y=0.1, color=color.red)
         respawn_text = Text(parent=death_screen, text="Respawning in 3...", scale=2, origin=(0,0), y=-0.1, color=color.white)
         
-        scope_ui = Entity(parent=camera.ui, model='quad', color=color.rgba(0,0,0,0), scale=(2,1), z=-1, visible=False)
-        Entity(parent=scope_ui, model='quad', color=color.black, scale=(0.8, 1), x=-0.8) 
-        Entity(parent=scope_ui, model='quad', color=color.black, scale=(0.8, 1), x=0.8)  
-        Entity(parent=scope_ui, model='quad', color=color.black, scale=(2, 0.35), y=0.5) 
-        Entity(parent=scope_ui, model='quad', color=color.black, scale=(2, 0.35), y=-0.5) 
-        Entity(parent=scope_ui, model='quad', color=color.red, scale=(0.2, 0.003))        
-        Entity(parent=scope_ui, model='quad', color=color.red, scale=(0.003, 0.2))        
+        # Permanent Center Crosshair
+        crosshair = Entity(parent=camera.ui, model='quad', color=color.white, scale=(0.008, 0.008), z=-1)
+        
+        # Transparent Sniper Scope (No black boxes, just thin lines)
+        scope_ui = Entity(parent=camera.ui, visible=False)
+        Entity(parent=scope_ui, model='quad', color=color.black, scale=(2, 0.002)) # Horizontal
+        Entity(parent=scope_ui, model='quad', color=color.black, scale=(0.002, 2)) # Vertical
+        Entity(parent=scope_ui, model='quad', color=color.red, scale=(0.01, 0.01)) # Red Dot
         
         build_weapons()
         equip_weapon(1)
@@ -401,13 +405,11 @@ def update():
         connected_successfully = False 
         
     if game_started and ws and player:
-        # 1. Self Update Leaderboard Data
         leaderboard_data[my_id] = {'name': my_name, 'color': my_color, 'kills': my_kills}
         
-        # 2. Render Leaderboard UI
         sorted_players = sorted(leaderboard_data.values(), key=lambda x: x['kills'], reverse=True)
         lb_text = "<white>LEADERBOARD\n"
-        for p in sorted_players[:5]: # Show top 5
+        for p in sorted_players[:5]: 
             hex_c = rgb_to_hex(*p['color'])
             lb_text += f"<{hex_c}>{p['name']} <white>- {p['kills']}\n"
         ui_elements['leaderboard'].text = lb_text
@@ -429,8 +431,6 @@ def update():
             
             if info['type'] == 'player':
                 pid = info['id']
-                
-                # Update external player in Leaderboard
                 p_kills = info.get('kills', 0)
                 p_color = info.get('color', (255, 0, 255))
                 p_name = info.get('name', 'Unknown')
@@ -441,7 +441,6 @@ def update():
                 if pid not in other_players:
                     other_players[pid] = Entity()
                     other_players[pid].pid = pid
-                    
                     hitbox = Entity(parent=other_players[pid], model='cube', color=color.clear, collider='box', scale=(1, 2, 1), y=1)
                     hitbox.pid = pid 
                     
@@ -491,7 +490,7 @@ def update():
             if not is_dead:
                 ws.send(json.dumps({
                     'type': 'player', 'id': my_id, 'x': player.x, 'y': player.y, 'z': player.z, 'rot_y': player.rotation_y,
-                    'color': my_color, 'name': my_name, 'kills': my_kills # Added kills to sync packet
+                    'color': my_color, 'name': my_name, 'kills': my_kills
                 }))
         except: pass
 
@@ -509,14 +508,17 @@ def input(key):
         current_mode = 'build'
         active_gun.visible = False
         preview_block.visible = True
+        
+        # Reset aim state if they pull out blueprints
         if scope_ui: scope_ui.visible = False
+        if crosshair: crosshair.visible = True
+        camera.fov = 90
+        is_aiming = False
         
         if key == 'z': build_mode = 'wall'
         if key == 'x': build_mode = 'floor'
         if key == 'c': build_mode = 'ramp'
         
-        camera.fov = 90
-        is_aiming = False
         update_hud()
 
     if key == 'r' and current_mode == 'combat':
@@ -562,12 +564,11 @@ def input(key):
                     dist = hit_info.distance if hit_info.hit else 200
                     target_pt = hit_info.world_point if hit_info.hit else camera.world_position + (shoot_dir * dist)
                     
-                    # FIX: Solid Line Trail stretching from gun to target
                     trail = Entity(model='cube', color=color.rgba(255, 255, 100, 200), unlit=True)
                     trail.position = active_gun.world_position
                     trail.look_at(target_pt)
                     trail.scale = (0.02, 0.02, dist)
-                    trail.position += trail.forward * (dist / 2) # Shift forward so base touches the gun
+                    trail.position += trail.forward * (dist / 2) 
                     
                     trail.animate_color(color.clear, duration=0.2)
                     destroy(trail, delay=0.25)
@@ -575,7 +576,19 @@ def input(key):
             if hit_info.hit:
                 spawn_hit_particle(hit_info.world_point)
                 
+                # --- OFFENSIVE HIT FEEDBACK ---
                 if hasattr(hit_info.entity, 'pid'):
+                    # 1. Flash the Red 'X' Hitmarker
+                    hitmarker.visible = True
+                    invoke(setattr, hitmarker, 'visible', False, delay=0.2)
+                    
+                    # 2. Show floating damage numbers
+                    damage_dealt_ui.text = str(wep['dmg'])
+                    damage_dealt_ui.color = color.rgba(255, 255, 0, 255)
+                    damage_dealt_ui.animate_y(0.08, duration=0.5)
+                    damage_dealt_ui.animate_color(color.clear, duration=0.5)
+                    invoke(setattr, damage_dealt_ui, 'y', 0.03, delay=0.5) 
+                    
                     try: ws.send(json.dumps({'type': 'damage', 'target_id': hit_info.entity.pid, 'amount': wep['dmg'], 'attacker_id': my_id}))
                     except: pass
                 
@@ -596,6 +609,7 @@ def input(key):
         if current_weapon == 3:
             camera.fov = 10 
             scope_ui.visible = True
+            crosshair.visible = False
             active_gun.visible = False
         else:
             camera.fov = 60 
@@ -606,6 +620,7 @@ def input(key):
         camera.fov = 90 
         if current_weapon == 3:
             scope_ui.visible = False
+            crosshair.visible = True
             active_gun.visible = True
         else:
             active_gun.position = Vec3(0.3, -0.3, 0.5) 
