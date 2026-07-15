@@ -20,7 +20,7 @@ window.exit_button.visible = False
 # CLIENT SETTINGS & VERSION
 # ==========================================
 SERVER_URL = 'wss://fortnite-5xm3.onrender.com'
-GAME_VERSION = "1.1.0"
+GAME_VERSION = "1.1.1"
 ws = None
 
 # --- PLAYER IDENTITY & STATS ---
