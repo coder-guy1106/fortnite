@@ -9,7 +9,6 @@ import os
 import random
 import time
 
-# Fix VS Code pathing
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 app = Ursina()
@@ -17,10 +16,14 @@ window.title = 'Project: Build & Battle'
 window.borderless = False
 window.exit_button.visible = False
 
+# ==========================================
+# CLIENT SETTINGS & VERSION
+# ==========================================
 SERVER_URL = 'wss://fortnite-5xm3.onrender.com'
+GAME_VERSION = "1.1.0" # Must match the server!
 ws = None
 
-# --- PLAYER IDENTITY & STATS ---
+# --- PLAYER IDENTITY ---
 my_id = str(uuid.uuid4())
 my_name = f"Player_{random.randint(1000, 9999)}"
 my_color = (random.randint(50, 255), random.randint(50, 255), random.randint(50, 255))
@@ -54,7 +57,6 @@ ground = None
 preview_block = None
 ui_elements = {}
 
-# UI Elements
 damage_borders = []
 hit_text_ui = None
 death_screen = None
@@ -79,7 +81,7 @@ def rgb_to_hex(r, g, b):
     return f"#{int(r):02x}{int(g):02x}{int(b):02x}"
 
 # ==========================================
-# NETWORKING
+# NETWORKING & HANDSHAKE
 # ==========================================
 def receive_data():
     global ws
@@ -95,6 +97,11 @@ def try_connect_background():
     try:
         ws = websocket.WebSocket()
         ws.connect(SERVER_URL, timeout=60) 
+        
+        # Send Handshake immediately
+        handshake = json.dumps({'type': 'join', 'id': my_id, 'version': GAME_VERSION})
+        ws.send(handshake)
+        
         threading.Thread(target=receive_data, daemon=True).start()
         connected_successfully = True
     except:
@@ -105,7 +112,7 @@ def start_game():
     global connecting
     if connecting: return 
     connecting = True
-    ui_elements['status'].text = "Waking up cloud server..."
+    ui_elements['status'].text = f"Connecting (v{GAME_VERSION})..."
     ui_elements['status'].color = color.yellow
     threading.Thread(target=try_connect_background, daemon=True).start()
 
@@ -115,6 +122,7 @@ def start_game():
 menu_parent = Entity(parent=camera.ui)
 Entity(parent=menu_parent, model='quad', scale=(2, 1), color=color.rgba(15, 15, 20, 255))
 Text(text="BUILD & BATTLE", parent=menu_parent, y=0.3, scale=3, origin=(0,0), color=color.cyan)
+Text(text=f"v{GAME_VERSION}", parent=menu_parent, y=0.2, scale=1.5, origin=(0,0), color=color.gray)
 Button(text='PLAY ONLINE', parent=menu_parent, y=-0.05, scale=(0.4, 0.12), color=color.rgba(0, 150, 100, 255)).on_click = start_game
 ui_elements['status'] = Text(text="", parent=menu_parent, y=-0.25, origin=(0,0), color=color.white)
 
@@ -172,7 +180,6 @@ def reload_weapon():
     wep = weapons[current_weapon]
     if wep['ammo'] == wep['max_ammo'] or current_weapon == 0 or is_dead: return
     
-    # FIX: Break out of Sniper Aim when reloading
     is_reloading = True
     is_aiming = False
     camera.fov = 90
@@ -352,8 +359,9 @@ def respawn():
 # MAIN LOOP
 # ==========================================
 def update():
-    global game_started, connected_successfully, ground, player, preview_block, my_health, damage_borders
-    global hit_text_ui, hitmarker, damage_dealt_ui, crosshair, death_screen, respawn_text, scope_ui, my_kills
+    global game_started, connected_successfully, connecting, connection_error
+    global ground, player, preview_block, my_health, damage_borders
+    global hit_text_ui, hitmarker, damage_dealt_ui, crosshair, death_screen, respawn_text, scope_ui, my_kills, ws
     
     if connection_error != "":
         ui_elements['status'].text = connection_error
@@ -406,7 +414,6 @@ def update():
         connected_successfully = False 
         
     if game_started and ws and player:
-        # FIX: Heartbeat Timeout System (Delete disconnected players)
         current_time = time.time()
         to_drop = [pid for pid, ent in other_players.items() if hasattr(ent, 'last_seen') and current_time - ent.last_seen > 3.0]
         for pid in to_drop:
@@ -437,7 +444,19 @@ def update():
         while len(network_queue) > 0:
             info = network_queue.pop(0)
             
-            if info['type'] == 'player':
+            # --- ERROR HANDLING (Version Mismatch Kick) ---
+            if info.get('type') == 'error':
+                connection_error = info['message']
+                game_started = False
+                connecting = False
+                connected_successfully = False
+                menu_parent.enabled = True
+                mouse.locked = False
+                if ws: ws.close()
+                ws = None
+                return # Stop processing
+            
+            elif info['type'] == 'player':
                 pid = info['id']
                 p_kills = info.get('kills', 0)
                 p_color = info.get('color', (255, 0, 255))
@@ -451,7 +470,6 @@ def update():
                     hitbox = Entity(parent=other_players[pid], model='cube', color=color.clear, collider='box', scale=(1, 2, 1), y=1)
                     hitbox.pid = pid 
                     
-                    # We store original colors to restore them after damage flashes
                     p_head = Entity(parent=other_players[pid], model='cube', color=color.rgb(220,185,155), scale=(0.5, 0.5, 0.5), y=1.85)
                     p_torso = Entity(parent=other_players[pid], model='cube', color=c_obj, scale=(0.8, 0.8, 0.4), y=1.1)
                     p_armL = Entity(parent=other_players[pid], model='cube', color=c_obj.tint(-0.2), scale=(0.2, 0.8, 0.2), x=0.55, y=1.1)
@@ -466,7 +484,7 @@ def update():
                     
                 other_players[pid].position = (info['x'], info['y'], info['z'])
                 other_players[pid].rotation_y = info['rot_y']
-                other_players[pid].last_seen = time.time() # Refresh heartbeat
+                other_players[pid].last_seen = time.time()
             
             elif info['type'] == 'build':
                 b_id = info.get('block_id', str(uuid.uuid4()))
@@ -492,7 +510,6 @@ def update():
                     if my_health <= 0:
                         handle_death()
                 
-                # FIX: Flash other players red if they get hit
                 elif info['target_id'] in other_players:
                     enemy = other_players[info['target_id']]
                     for part in enemy.children:
