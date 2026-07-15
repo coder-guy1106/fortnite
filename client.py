@@ -168,11 +168,20 @@ def update_hud():
         ui_elements['wep'].text = f"BUILD: {build_mode.upper()} | Combat: 0,1,2,3"
 
 def reload_weapon():
-    global is_reloading
+    global is_reloading, is_aiming
     wep = weapons[current_weapon]
     if wep['ammo'] == wep['max_ammo'] or current_weapon == 0 or is_dead: return
     
+    # FIX: Break out of Sniper Aim when reloading
     is_reloading = True
+    is_aiming = False
+    camera.fov = 90
+    if scope_ui: scope_ui.visible = False
+    if crosshair: crosshair.visible = True
+    if active_gun:
+        active_gun.visible = True
+        active_gun.position = Vec3(0.3, -0.3, 0.5)
+
     ui_elements['wep'].text = f"RELOADING..."
     
     def finish_reload():
@@ -216,7 +225,6 @@ def is_supported(cx, cy, cz):
 
 def check_structural_integrity():
     if not built_cells: return
-    
     visited = set()
     queue = []
     
@@ -229,7 +237,6 @@ def check_structural_integrity():
     while head < len(queue):
         cx, cy, cz = queue[head]
         head += 1
-        
         for dx, dy, dz in [(-1,0,0), (1,0,0), (0,-1,0), (0,1,0), (0,0,-1), (0,0,1)]:
             neighbor = (cx+dx, cy+dy, cz+dz)
             if neighbor in built_cells and neighbor not in visited:
@@ -240,10 +247,8 @@ def check_structural_integrity():
     for coord in unsupported:
         block = built_cells[coord]
         block_id = block.block_id
-        
         destroy_block_local(coord[0], coord[1], coord[2], check_stability=False)
-        try:
-            ws.send(json.dumps({'type': 'destroy_block', 'block_id': block_id, 'cx': coord[0], 'cy': coord[1], 'cz': coord[2]}))
+        try: ws.send(json.dumps({'type': 'destroy_block', 'block_id': block_id, 'cx': coord[0], 'cy': coord[1], 'cz': coord[2]}))
         except: pass
 
 def get_world_pos_and_rot(cx, cy, cz, b_type, player_rot_y):
@@ -370,7 +375,6 @@ def update():
         ui_elements['wep'] = Text(text="", position=(0.3, -0.4), scale=1.5, color=color.white)
         ui_elements['leaderboard'] = Text(text="LEADERBOARD", position=(0.6, 0.45), scale=1.5, color=color.white)
         
-        # Damage Taking Borders
         for _ in range(4):
             damage_borders.append(Entity(parent=camera.ui, model='quad', color=color.rgba(255, 0, 0, 0), z=-1))
         damage_borders[0].scale, damage_borders[0].y = (2, 0.05), 0.475  
@@ -378,7 +382,6 @@ def update():
         damage_borders[2].scale, damage_borders[2].x = (0.05, 1), -0.875 
         damage_borders[3].scale, damage_borders[3].x = (0.05, 1), 0.875  
         
-        # Hit Feedback UIs (Taking and Dealing)
         hit_text_ui = Text(parent=camera.ui, text="", color=color.red, scale=3, origin=(0,0), y=0.1)
         hitmarker = Text(parent=camera.ui, text="X", color=color.red, scale=3, origin=(0,0), visible=False)
         damage_dealt_ui = Text(parent=camera.ui, text="", color=color.yellow, scale=2, origin=(0,0), x=0.03, y=0.03)
@@ -387,14 +390,12 @@ def update():
         Text(parent=death_screen, text="YOU WERE ELIMINATED", scale=3, origin=(0,0), y=0.1, color=color.red)
         respawn_text = Text(parent=death_screen, text="Respawning in 3...", scale=2, origin=(0,0), y=-0.1, color=color.white)
         
-        # Permanent Center Crosshair
         crosshair = Entity(parent=camera.ui, model='quad', color=color.white, scale=(0.008, 0.008), z=-1)
         
-        # Transparent Sniper Scope (No black boxes, just thin lines)
         scope_ui = Entity(parent=camera.ui, visible=False)
-        Entity(parent=scope_ui, model='quad', color=color.black, scale=(2, 0.002)) # Horizontal
-        Entity(parent=scope_ui, model='quad', color=color.black, scale=(0.002, 2)) # Vertical
-        Entity(parent=scope_ui, model='quad', color=color.red, scale=(0.01, 0.01)) # Red Dot
+        Entity(parent=scope_ui, model='quad', color=color.black, scale=(2, 0.002)) 
+        Entity(parent=scope_ui, model='quad', color=color.black, scale=(0.002, 2)) 
+        Entity(parent=scope_ui, model='quad', color=color.red, scale=(0.01, 0.01)) 
         
         build_weapons()
         equip_weapon(1)
@@ -405,8 +406,15 @@ def update():
         connected_successfully = False 
         
     if game_started and ws and player:
+        # FIX: Heartbeat Timeout System (Delete disconnected players)
+        current_time = time.time()
+        to_drop = [pid for pid, ent in other_players.items() if hasattr(ent, 'last_seen') and current_time - ent.last_seen > 3.0]
+        for pid in to_drop:
+            destroy(other_players[pid])
+            del other_players[pid]
+            if pid in leaderboard_data: del leaderboard_data[pid]
+
         leaderboard_data[my_id] = {'name': my_name, 'color': my_color, 'kills': my_kills}
-        
         sorted_players = sorted(leaderboard_data.values(), key=lambda x: x['kills'], reverse=True)
         lb_text = "<white>LEADERBOARD\n"
         for p in sorted_players[:5]: 
@@ -435,7 +443,6 @@ def update():
                 p_color = info.get('color', (255, 0, 255))
                 p_name = info.get('name', 'Unknown')
                 leaderboard_data[pid] = {'name': p_name, 'color': p_color, 'kills': p_kills}
-                
                 c_obj = color.rgb(p_color[0], p_color[1], p_color[2])
                 
                 if pid not in other_players:
@@ -444,17 +451,22 @@ def update():
                     hitbox = Entity(parent=other_players[pid], model='cube', color=color.clear, collider='box', scale=(1, 2, 1), y=1)
                     hitbox.pid = pid 
                     
-                    Entity(parent=other_players[pid], model='cube', color=color.rgb(220,185,155), scale=(0.5, 0.5, 0.5), y=1.85) 
-                    Entity(parent=other_players[pid], model='cube', color=c_obj, scale=(0.8, 0.8, 0.4), y=1.1) 
-                    Entity(parent=other_players[pid], model='cube', color=c_obj.tint(-0.2), scale=(0.2, 0.8, 0.2), x=0.55, y=1.1) 
-                    Entity(parent=other_players[pid], model='cube', color=c_obj.tint(-0.2), scale=(0.2, 0.8, 0.2), x=-0.55, y=1.1) 
-                    Entity(parent=other_players[pid], model='cube', color=color.dark_gray, scale=(0.3, 0.8, 0.3), x=0.22, y=0.4) 
-                    Entity(parent=other_players[pid], model='cube', color=color.dark_gray, scale=(0.3, 0.8, 0.3), x=-0.22, y=0.4) 
+                    # We store original colors to restore them after damage flashes
+                    p_head = Entity(parent=other_players[pid], model='cube', color=color.rgb(220,185,155), scale=(0.5, 0.5, 0.5), y=1.85)
+                    p_torso = Entity(parent=other_players[pid], model='cube', color=c_obj, scale=(0.8, 0.8, 0.4), y=1.1)
+                    p_armL = Entity(parent=other_players[pid], model='cube', color=c_obj.tint(-0.2), scale=(0.2, 0.8, 0.2), x=0.55, y=1.1)
+                    p_armR = Entity(parent=other_players[pid], model='cube', color=c_obj.tint(-0.2), scale=(0.2, 0.8, 0.2), x=-0.55, y=1.1)
+                    p_legL = Entity(parent=other_players[pid], model='cube', color=color.dark_gray, scale=(0.3, 0.8, 0.3), x=0.22, y=0.4)
+                    p_legR = Entity(parent=other_players[pid], model='cube', color=color.dark_gray, scale=(0.3, 0.8, 0.3), x=-0.22, y=0.4)
+                    
+                    for part in [p_head, p_torso, p_armL, p_armR, p_legL, p_legR]:
+                        part.original_color = part.color
                     
                     other_player_labels[pid] = Text(parent=other_players[pid], text=p_name, y=2.3, scale=5, billboard=True, origin=(0,0), color=c_obj)
                     
                 other_players[pid].position = (info['x'], info['y'], info['z'])
                 other_players[pid].rotation_y = info['rot_y']
+                other_players[pid].last_seen = time.time() # Refresh heartbeat
             
             elif info['type'] == 'build':
                 b_id = info.get('block_id', str(uuid.uuid4()))
@@ -463,21 +475,36 @@ def update():
             elif info['type'] == 'destroy_block':
                 destroy_block_local(info['cx'], info['cy'], info['cz'], check_stability=False)
                 
-            elif info['type'] == 'damage' and info['target_id'] == my_id and not is_dead:
-                my_health -= info['amount']
-                last_attacker_id = info.get('attacker_id', '') 
-                ui_elements['health'].text = f"HP: {my_health}"
+            elif info['type'] == 'damage':
+                if info['target_id'] == my_id and not is_dead:
+                    my_health -= info['amount']
+                    last_attacker_id = info.get('attacker_id', '') 
+                    ui_elements['health'].text = f"HP: {my_health}"
+                    
+                    for border in damage_borders:
+                        border.color = color.rgba(255, 0, 0, 180)
+                        border.animate_color(color.rgba(255, 0, 0, 0), duration=0.4)
+                    
+                    hit_text_ui.text = f"-{info['amount']} HP"
+                    hit_text_ui.color = color.rgba(255, 50, 50, 255)
+                    hit_text_ui.animate_color(color.clear, duration=0.6)
+                    
+                    if my_health <= 0:
+                        handle_death()
                 
-                for border in damage_borders:
-                    border.color = color.rgba(255, 0, 0, 180)
-                    border.animate_color(color.rgba(255, 0, 0, 0), duration=0.4)
-                
-                hit_text_ui.text = f"-{info['amount']} HP"
-                hit_text_ui.color = color.rgba(255, 50, 50, 255)
-                hit_text_ui.animate_color(color.clear, duration=0.6)
-                
-                if my_health <= 0:
-                    handle_death()
+                # FIX: Flash other players red if they get hit
+                elif info['target_id'] in other_players:
+                    enemy = other_players[info['target_id']]
+                    for part in enemy.children:
+                        if hasattr(part, 'original_color'):
+                            part.color = color.red
+                    
+                    def reset_color(e_id=info['target_id']):
+                        if e_id in other_players:
+                            for p in other_players[e_id].children:
+                                if hasattr(p, 'original_color'):
+                                    p.color = p.original_color
+                    invoke(reset_color, delay=0.2)
                     
             elif info['type'] == 'eliminated':
                 if info['killer_id'] == my_id:
@@ -509,7 +536,6 @@ def input(key):
         active_gun.visible = False
         preview_block.visible = True
         
-        # Reset aim state if they pull out blueprints
         if scope_ui: scope_ui.visible = False
         if crosshair: crosshair.visible = True
         camera.fov = 90
@@ -576,13 +602,10 @@ def input(key):
             if hit_info.hit:
                 spawn_hit_particle(hit_info.world_point)
                 
-                # --- OFFENSIVE HIT FEEDBACK ---
                 if hasattr(hit_info.entity, 'pid'):
-                    # 1. Flash the Red 'X' Hitmarker
                     hitmarker.visible = True
                     invoke(setattr, hitmarker, 'visible', False, delay=0.2)
                     
-                    # 2. Show floating damage numbers
                     damage_dealt_ui.text = str(wep['dmg'])
                     damage_dealt_ui.color = color.rgba(255, 255, 0, 255)
                     damage_dealt_ui.animate_y(0.08, duration=0.5)
