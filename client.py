@@ -9,6 +9,7 @@ import os
 import random
 import time
 
+# Fix VS Code pathing
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 app = Ursina()
@@ -18,8 +19,14 @@ window.exit_button.visible = False
 
 SERVER_URL = 'wss://fortnite-5xm3.onrender.com'
 ws = None
+
+# --- PLAYER IDENTITY ---
 my_id = str(uuid.uuid4())
+my_name = f"Player_{random.randint(1000, 9999)}"
+my_color = (random.randint(50, 255), random.randint(50, 255), random.randint(50, 255))
+
 other_players = {}
+other_player_labels = {}
 network_queue = [] 
 
 game_started = False
@@ -30,24 +37,29 @@ connection_error = ""
 current_mode = 'combat' 
 is_aiming = False       
 is_reloading = False
+is_dead = False # Death State
 
 my_health = 100
 current_weapon = 1 
 build_mode = 'wall'
 GRID_SIZE = 4 
 BUILD_RANGE = GRID_SIZE * 1.5 
-built_cells = {} # Tracks coords -> block entity
+built_cells = {} 
 
 player = None
 ground = None
 preview_block = None
 ui_elements = {}
 damage_overlay = None
+hit_text_ui = None
+
+# Death UI
+death_screen = None
+respawn_text = None
 
 gun_entities = {}
 active_gun = None
 
-# WEAPON STATS: Added Pickaxe, Cooldowns, Ammo, and Reload Times
 weapons = {
     0: {'name': 'Pickaxe', 'dmg': 20, 'bdmg': 50, 'color': color.gray, 'cooldown': 0.5, 'ammo': 999, 'max_ammo': 999, 'reload': 0, 'spread': 0},
     1: {'name': 'Assault Rifle', 'dmg': 15, 'bdmg': 15, 'color': color.dark_gray, 'cooldown': 0.15, 'ammo': 30, 'max_ammo': 30, 'reload': 1.5, 'spread': 0.02},
@@ -94,9 +106,9 @@ ui_elements['status'] = Text(text="", parent=menu_parent, y=-0.25, origin=(0,0),
 
 # --- WEAPONS ---
 def build_weapons():
-    # Pickaxe
+    # Pickaxe (Using a cube for the handle to prevent missing cylinder error)
     pickaxe = Entity(parent=camera, position=(0.3, -0.3, 0.5), visible=False)
-    Entity(parent=pickaxe, model='cylinder', color=color.brown, scale=(0.02, 0.6, 0.02), rotation_x=90) 
+    Entity(parent=pickaxe, model='cube', color=color.brown, scale=(0.02, 0.6, 0.02), rotation_x=90) 
     Entity(parent=pickaxe, model='cube', color=color.gray, scale=(0.3, 0.1, 0.05), position=(0, 0, 0.25))
     gun_entities[0] = {'entity': pickaxe}
 
@@ -116,7 +128,7 @@ def build_weapons():
 
 def equip_weapon(w_id):
     global active_gun, current_weapon, current_mode, is_reloading
-    if is_reloading: return
+    if is_reloading or is_dead: return
     if active_gun: active_gun.visible = False
     
     current_mode = 'combat'
@@ -138,16 +150,17 @@ def update_hud():
 def reload_weapon():
     global is_reloading
     wep = weapons[current_weapon]
-    if wep['ammo'] == wep['max_ammo'] or current_weapon == 0: return
+    if wep['ammo'] == wep['max_ammo'] or current_weapon == 0 or is_dead: return
     
     is_reloading = True
     ui_elements['wep'].text = f"RELOADING..."
     
     def finish_reload():
         global is_reloading
-        wep['ammo'] = wep['max_ammo']
-        is_reloading = False
-        update_hud()
+        if not is_dead:
+            wep['ammo'] = wep['max_ammo']
+            is_reloading = False
+            update_hud()
     
     invoke(finish_reload, delay=wep['reload'])
 
@@ -203,12 +216,11 @@ def place_structure_local(cx, cy, cz, b_type, rot_y, block_id):
     
     block = Entity(model='cube', texture='white_cube', color=color.cyan, position=pos, rotation=(0 if b_type!='ramp' else -45, final_rot, 0), scale=scale, collider=col_type)
     block.block_id = block_id
-    block.hp = 150 # Wall health
+    block.hp = 150 
     block.cx, block.cy, block.cz = cx, cy, cz
     
     built_cells[(cx, cy, cz)] = block
     
-    # Despawn Timer (60 seconds)
     def destroy_self():
         if (cx, cy, cz) in built_cells and built_cells[(cx, cy, cz)] == block:
             destroy_block_local(cx, cy, cz)
@@ -221,9 +233,50 @@ def destroy_block_local(cx, cy, cz):
         destroy(built_cells[(cx, cy, cz)])
         del built_cells[(cx, cy, cz)]
 
+# --- DEATH & RESPAWN ---
+def handle_death():
+    global is_dead, my_health
+    is_dead = True
+    my_health = 0
+    ui_elements['health'].text = f"HP: {my_health}"
+    
+    player.disable() # Freezes player movement
+    if active_gun: active_gun.visible = False
+    if preview_block: preview_block.visible = False
+    
+    death_screen.visible = True
+    camera.fov = 90
+    
+    def countdown(t):
+        if t > 0:
+            respawn_text.text = f"Respawning in {t}..."
+            invoke(countdown, t-1, delay=1)
+        else:
+            respawn()
+            
+    countdown(3)
+
+def respawn():
+    global is_dead, my_health, is_reloading
+    is_dead = False
+    is_reloading = False
+    my_health = 100
+    ui_elements['health'].text = f"HP: {my_health}"
+    
+    player.position = (0, 20, 0) # Drop from sky
+    player.enable()
+    death_screen.visible = False
+    
+    # Reload all weapons on respawn
+    for w in weapons.values():
+        w['ammo'] = w['max_ammo']
+    
+    equip_weapon(1)
+
 # --- GAME LOOP ---
 def update():
-    global game_started, connected_successfully, ground, player, preview_block, my_health, damage_overlay
+    global game_started, connected_successfully, ground, player, preview_block, my_health, damage_overlay, hit_text_ui
+    global death_screen, respawn_text
     
     if connection_error != "":
         ui_elements['status'].text = connection_error
@@ -237,13 +290,20 @@ def update():
         ground = Entity(model='plane', scale=(150, 1, 150), texture='grass', texture_scale=(30, 30), collider='box')
         
         player = FirstPersonController()
-        player.y = 5
+        player.y = 10
         player.step_height = 1.2 
         
         ui_elements['health'] = Text(text=f"HP: {my_health}", position=(-0.85, -0.4), scale=2, color=color.green)
         ui_elements['wep'] = Text(text="", position=(0.3, -0.4), scale=1.5, color=color.white)
         
+        # Hit effects UI
         damage_overlay = Entity(parent=camera.ui, model='quad', color=color.rgba(255, 0, 0, 0), scale=(2, 1), z=-1)
+        hit_text_ui = Text(parent=camera.ui, text="", color=color.red, scale=3, origin=(0,0), y=0.1)
+        
+        # Death Screen UI
+        death_screen = Entity(parent=camera.ui, model='quad', color=color.rgba(0, 0, 0, 220), scale=(2, 1), z=-2, visible=False)
+        Text(parent=death_screen, text="YOU WERE ELIMINATED", scale=3, origin=(0,0), y=0.1, color=color.red)
+        respawn_text = Text(parent=death_screen, text="Respawning in 3...", scale=2, origin=(0,0), y=-0.1, color=color.white)
         
         build_weapons()
         equip_weapon(1)
@@ -254,7 +314,7 @@ def update():
         connected_successfully = False 
         
     if game_started and ws and player:
-        if current_mode == 'build':
+        if current_mode == 'build' and not is_dead:
             cx, cy, cz = get_target_cell()
             if is_supported(cx, cy, cz):
                 preview_block.color = color.rgba(0, 200, 255, 120)
@@ -268,39 +328,56 @@ def update():
 
         while len(network_queue) > 0:
             info = network_queue.pop(0)
+            
             if info['type'] == 'player':
                 pid = info['id']
                 if pid not in other_players:
-                    other_players[pid] = Entity(model='cube', color=color.magenta, scale=(1.2, 2.5, 1.2), collider='box')
+                    c = info.get('color', (255, 0, 255))
+                    c_obj = color.rgb(c[0], c[1], c[2])
+                    
+                    other_players[pid] = Entity(model='cube', color=c_obj, scale=(1.2, 2.5, 1.2), collider='box')
                     other_players[pid].pid = pid 
+                    
+                    # Billboard Nameplate
+                    p_name = info.get('name', 'Unknown')
+                    other_player_labels[pid] = Text(parent=other_players[pid], text=p_name, y=0.6, scale=5, billboard=True, origin=(0,0), color=c_obj)
+                    
                 other_players[pid].position = (info['x'], info['y'], info['z'])
                 other_players[pid].rotation_y = info['rot_y']
             
             elif info['type'] == 'build':
-                place_structure_local(info['cx'], info['cy'], info['cz'], info['b_type'], info['rot_y'], info['block_id'])
+                b_id = info.get('block_id', str(uuid.uuid4())) # Fallback for old packets
+                place_structure_local(info['cx'], info['cy'], info['cz'], info['b_type'], info['rot_y'], b_id)
                 
             elif info['type'] == 'destroy_block':
                 destroy_block_local(info['cx'], info['cy'], info['cz'])
                 
-            elif info['type'] == 'damage' and info['target_id'] == my_id:
+            elif info['type'] == 'damage' and info['target_id'] == my_id and not is_dead:
                 my_health -= info['amount']
+                ui_elements['health'].text = f"HP: {my_health}"
                 
-                # Damage Flash Apparent
-                damage_overlay.color = color.rgba(255, 0, 0, 100)
-                damage_overlay.animate_color(color.rgba(255, 0, 0, 0), duration=0.3)
+                # Intense Hit Feedback
+                damage_overlay.color = color.rgba(255, 0, 0, 180)
+                damage_overlay.animate_color(color.rgba(255, 0, 0, 0), duration=0.4)
+                
+                hit_text_ui.text = f"-{info['amount']} HP"
+                hit_text_ui.color = color.rgba(255, 50, 50, 255)
+                hit_text_ui.animate_color(color.clear, duration=0.6)
                 
                 if my_health <= 0:
-                    my_health = 100 
-                    player.position = (0, 10, 0) 
-                ui_elements['health'].text = f"HP: {my_health}"
+                    handle_death()
 
         try:
-            ws.send(json.dumps({'type': 'player', 'id': my_id, 'x': player.x, 'y': player.y, 'z': player.z, 'rot_y': player.rotation_y}))
+            if not is_dead:
+                ws.send(json.dumps({
+                    'type': 'player', 'id': my_id, 'x': player.x, 'y': player.y, 'z': player.z, 'rot_y': player.rotation_y,
+                    'color': my_color, 'name': my_name
+                }))
         except: pass
 
 def input(key):
     global build_mode, current_mode, is_aiming, last_fired
-    if not game_started or is_reloading: return
+    if not game_started or is_reloading or is_dead: return
 
     if key in ['0', '1', '2', '3']:
         equip_weapon(int(key)) 
@@ -347,15 +424,13 @@ def input(key):
             active_gun.position = base_pos + Vec3(0, 0.05, -0.1)
             invoke(setattr, active_gun, 'position', base_pos, delay=0.1)
 
-            # Determine pellet count (Shotgun fires 5, others fire 1)
             pellets = 5 if current_weapon == 2 else 1
             
             for _ in range(pellets):
-                # Apply spread
                 shoot_dir = camera.forward + Vec3(random.uniform(-wep['spread'], wep['spread']), random.uniform(-wep['spread'], wep['spread']), 0)
                 hit_info = raycast(camera.world_position, shoot_dir, distance=200, ignore=[player, preview_block, active_gun])
                 
-                if current_weapon != 0: # No tracers for pickaxe
+                if current_weapon != 0: 
                     tracer_len = hit_info.distance if hit_info.hit else 200
                     tracer = Entity(model='cube', color=color.rgba(255, 255, 100, 200), unlit=True, scale=(0.04, 0.04, tracer_len))
                     tracer.position = active_gun.world_position
@@ -367,15 +442,13 @@ def input(key):
                 if hit_info.hit:
                     spawn_hit_particle(hit_info.world_point)
                     
-                    # Hit a Player
                     if hasattr(hit_info.entity, 'pid'):
                         try: ws.send(json.dumps({'type': 'damage', 'target_id': hit_info.entity.pid, 'amount': wep['dmg']}))
                         except: pass
                     
-                    # Hit a Wall
                     elif hasattr(hit_info.entity, 'block_id'):
                         hit_info.entity.hp -= wep['bdmg']
-                        hit_info.entity.color = color.red # Flash red when hit
+                        hit_info.entity.color = color.red 
                         invoke(setattr, hit_info.entity, 'color', color.cyan, delay=0.1)
                         
                         if hit_info.entity.hp <= 0:
@@ -387,7 +460,6 @@ def input(key):
 
     if key == 'right mouse down' and current_mode == 'combat':
         is_aiming = True
-        # SPECIAL SNIPER ZOOM
         camera.fov = 20 if current_weapon == 3 else 60 
         active_gun.position = Vec3(0, -0.2, 0.4) 
 
