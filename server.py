@@ -3,35 +3,39 @@ import websockets
 import os
 import json
 
-# --- SERVER VERSION CONTROL ---
-REQUIRED_VERSION = "1.0.0"
+# ==========================================
+# SERVER VERSION AUTHORITY
+# Increment this when making major updates!
+# ==========================================
+SERVER_VERSION = "1.1.0"
 
 connected_clients = set()
 build_history = {} 
 
 async def handle_client(websocket):
     try:
-        # 1. The Handshake: Wait for the client to declare their version
         first_message = await websocket.recv()
         info = json.loads(first_message)
         
-        # Check if they sent a valid join packet with the correct version
-        if info.get('type') != 'join' or info.get('version') != REQUIRED_VERSION:
-            # Kick them by sending an error and closing the door
-            error_packet = json.dumps({'type': 'error', 'message': f'Version Mismatch! Server requires v{REQUIRED_VERSION}'})
+        # STRICT VERSION CHECK
+        if info.get('type') != 'join' or info.get('version') != SERVER_VERSION:
+            error_packet = json.dumps({
+                'type': 'error', 
+                'message': f'Version Mismatch! Server is running v{SERVER_VERSION}. Please update your game.'
+            })
             await websocket.send(error_packet)
             await websocket.close()
             return
             
-        # 2. If they pass the check, register them and send the map history
         connected_clients.add(websocket)
+        
+        # Send map history to the new player
         for block_id, block_data in build_history.items():
             try:
                 await websocket.send(block_data)
             except: 
                 pass
 
-        # 3. Continuous Loop: Listen for standard game messages
         async for message in websocket:
             try:
                 info = json.loads(message)
@@ -42,7 +46,6 @@ async def handle_client(websocket):
                         del build_history[info['block_id']]
             except: pass
             
-            # Broadcast to everyone else
             for client in connected_clients:
                 if client != websocket:
                     try:
@@ -58,7 +61,7 @@ async def handle_client(websocket):
 async def main():
     port = int(os.environ.get("PORT", 5555))
     async with websockets.serve(handle_client, "0.0.0.0", port):
-        print(f"[SERVER] Running on port {port} | Version: {REQUIRED_VERSION}")
+        print(f"[SERVER] Running on port {port} | Version: {SERVER_VERSION}")
         await asyncio.Future()
 
 if __name__ == "__main__":
