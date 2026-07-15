@@ -164,13 +164,23 @@ def get_world_pos_and_rot(cx, cy, cz, b_type, player_rot_y):
     if b_type == 'floor':
         return Vec3(x, y + 0.1, z), 0, (GRID_SIZE, 0.2, GRID_SIZE)
     elif b_type == 'ramp':
-        return Vec3(x, base_y, z), rot_y, (GRID_SIZE, 0.2, GRID_SIZE * 1.414) 
+        # FIX 1: We subtract 0.1 from base_y to bury the bottom lip into the ground!
+        return Vec3(x, base_y - 0.1, z), rot_y, (GRID_SIZE, 0.2, GRID_SIZE * 1.414) 
     elif b_type == 'wall':
         if rot_y == 0:   z += GRID_SIZE/2
         elif rot_y == 90:  x += GRID_SIZE/2
         elif rot_y == 180: z -= GRID_SIZE/2
         elif rot_y == 270: x -= GRID_SIZE/2
         return Vec3(x, base_y, z), rot_y, (GRID_SIZE, GRID_SIZE, 0.2)
+
+def place_structure_local(cx, cy, cz, b_type, rot_y):
+    pos, final_rot, scale = get_world_pos_and_rot(cx, cy, cz, b_type, rot_y)
+    
+    # FIX 2: Ramps get a 'mesh' collider so you slide up them, walls/floors keep 'box' for performance.
+    col_type = 'mesh' if b_type == 'ramp' else 'box'
+    
+    Entity(model='cube', texture='white_cube', color=color.cyan, position=pos, rotation=(0 if b_type!='ramp' else -45, final_rot, 0), scale=scale, collider=col_type)
+    built_cells.add((cx, cy, cz))
 
 def place_structure_local(cx, cy, cz, b_type, rot_y):
     pos, final_rot, scale = get_world_pos_and_rot(cx, cy, cz, b_type, rot_y)
